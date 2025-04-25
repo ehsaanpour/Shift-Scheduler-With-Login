@@ -1,0 +1,488 @@
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, flash
+from werkzeug.utils import secure_filename
+import json
+import os
+import calendar
+from datetime import datetime
+import openpyxl
+from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
+from openpyxl.utils import get_column_letter
+import shutil
+import tempfile
+import hashlib
+import secrets
+
+app = Flask(__name__, template_folder='templates', static_folder='static')
+app.secret_key = secrets.token_hex(16)  # Generate a random secret key
+
+# Configuration
+DATA_DIR = 'data'
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+ENGINEERS_FILE = os.path.join(DATA_DIR, 'engineers.json')
+SCHEDULES_FILE = os.path.join(DATA_DIR, 'schedules.json')
+USERS_FILE = os.path.join(DATA_DIR, 'users.json')
+WORKPLACES = ["Studio Hispan", "Studio Press", "Nodal", "Engineer Room"]
+SHIFTS = ["Shift 1", "Shift 2", "Shift 3"]
+
+# Initialize data files if they don't exist
+if not os.path.exists(ENGINEERS_FILE):
+    with open(ENGINEERS_FILE, 'w') as f:
+        json.dump([], f)
+
+if not os.path.exists(SCHEDULES_FILE):
+    with open(SCHEDULES_FILE, 'w') as f:
+        json.dump({}, f)
+
+if not os.path.exists(USERS_FILE):
+    with open(USERS_FILE, 'w') as f:
+        # Create a default admin user
+        default_admin = {
+            "username": "admin",
+            "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
+            "is_admin": True
+        }
+        json.dump([default_admin], f)
+
+# Authentication functions
+def load_users():
+    try:
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_users(users):
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password, password_hash):
+    return hash_password(password) == password_hash
+
+def get_user(username):
+    users = load_users()
+    for user in users:
+        if user["username"] == username:
+            return user
+    return None
+
+def authenticate_user(username, password):
+    user = get_user(username)
+    if not user:
+        return False
+    if not verify_password(password, user["password_hash"]):
+        return False
+    return user
+
+# Helper functions
+def load_engineers():
+    try:
+        with open(ENGINEERS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_engineers(engineers):
+    with open(ENGINEERS_FILE, 'w') as f:
+        json.dump(engineers, f)
+
+def load_schedules():
+    try:
+        with open(SCHEDULES_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_schedules(schedules):
+    with open(SCHEDULES_FILE, 'w') as f:
+        json.dump(schedules, f)
+
+# Login required decorator
+def login_required(f):
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
+
+# Admin required decorator
+def admin_required(f):
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login_page'))
+        if not session['user'].get('is_admin', False):
+            flash('You need admin privileges to access this page.')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
+
+# Routes
+@app.route('/')
+@login_required
+def index():
+    return render_template("index.html", 
+                           workplaces=WORKPLACES, 
+                           shifts=SHIFTS, 
+                           username=session['user']['username'])
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        user = authenticate_user(username, password)
+        if not user:
+            return render_template("login.html", error="Invalid username or password")
+        
+        # Store user in session
+        session['user'] = {"username": user["username"], "is_admin": user["is_admin"]}
+        
+        return redirect(url_for('index'))
+    
+    # If GET or already logged in
+    if 'user' in session:
+        return redirect(url_for('index'))
+    
+    return render_template("login.html", error=None)
+
+@app.route('/logout')
+def logout():
+    # Clear session
+    session.clear()
+    return redirect(url_for('login_page'))
+
+@app.route('/admin')
+@admin_required
+def admin_page():
+    # Remove password hashes for security
+    users = load_users()
+    users_display = []
+    for user in users:
+        users_display.append({
+            "username": user["username"],
+            "is_admin": user["is_admin"]
+        })
+    
+    return render_template("admin.html", 
+                           users=users_display, 
+                           username=session['user']['username'])
+
+@app.route('/admin/users', methods=['POST'])
+@admin_required
+def add_user():
+    username = request.form.get('username')
+    password = request.form.get('password')
+    is_admin = True if request.form.get('is_admin') else False
+    
+    users = load_users()
+    
+    # Check if user already exists
+    for user in users:
+        if user["username"] == username:
+            return render_template("admin.html", 
+                                  error=f"User {username} already exists",
+                                  users=[{"username": u["username"], "is_admin": u["is_admin"]} for u in users],
+                                  username=session['user']['username'])
+    
+    # Create new user
+    password_hash = hash_password(password)
+    new_user = {
+        "username": username,
+        "password_hash": password_hash,
+        "is_admin": is_admin
+    }
+    users.append(new_user)
+    save_users(users)
+    
+    return redirect(url_for('admin_page'))
+
+@app.route('/admin/users/<username>', methods=['DELETE'])
+@admin_required
+def delete_user(username):
+    # Cannot delete yourself
+    if username == session['user']['username']:
+        return jsonify({"error": "Cannot delete yourself"}), 400
+    
+    users = load_users()
+    users = [u for u in users if u["username"] != username]
+    save_users(users)
+    
+    return jsonify({"status": "success"})
+
+@app.route('/excel')
+@login_required
+def excel_version():
+    """
+    Alternative version of the main page with improved Excel generation capabilities.
+    Use this URL if the main page is having issues.
+    """
+    return render_template("index.html", 
+                          workplaces=WORKPLACES, 
+                          shifts=SHIFTS, 
+                          username=session['user']['username'])
+
+@app.route('/excel-generator')
+@login_required
+def excel_generator_page():
+    """
+    Standalone page for generating Excel files from the schedule.
+    Use this if the main Excel generation functionality isn't working.
+    """
+    return render_template("excel_generator.html", 
+                          username=session['user']['username'])
+
+# API Routes
+@app.route('/api/engineers', methods=['GET'])
+@login_required
+def get_engineers():
+    return jsonify(load_engineers())
+
+@app.route('/api/engineers', methods=['POST'])
+@admin_required
+def add_engineer():
+    data = request.json
+    engineers = load_engineers()
+    
+    # Check if updating or adding new
+    engineer_exists = False
+    for eng in engineers:
+        if eng['name'] == data['name']:
+            eng['workplaces'] = data['workplaces']
+            eng['limitations'] = data.get('limitations', {})
+            engineer_exists = True
+            break
+            
+    if not engineer_exists:
+        engineers.append({
+            'name': data['name'],
+            'workplaces': data['workplaces'],
+            'limitations': data.get('limitations', {})
+        })
+        
+    save_engineers(engineers)
+    return jsonify({"status": "success"})
+
+@app.route('/api/engineers/<name>', methods=['DELETE'])
+@admin_required
+def delete_engineer(name):
+    engineers = load_engineers()
+    engineers = [eng for eng in engineers if eng['name'] != name]
+    save_engineers(engineers)
+    return jsonify({"status": "success"})
+
+@app.route('/api/schedule', methods=['GET'])
+@login_required
+def get_schedule():
+    year = request.args.get('year', default=datetime.now().year, type=int)
+    month = request.args.get('month', default=datetime.now().month, type=int)
+    
+    schedules = load_schedules()
+    period_key = f"{year}-{month}"
+    
+    if period_key in schedules:
+        return jsonify(schedules[period_key])
+    return jsonify({})
+
+@app.route('/api/schedule', methods=['POST'])
+@admin_required
+def save_schedule():
+    data = request.json
+    year = data.get('year')
+    month = data.get('month')
+    workplaces = data.get('workplaces', {})
+    
+    schedules = load_schedules()
+    
+    # Create key for this month/year if not exists
+    period_key = f"{year}-{month}"
+    if period_key not in schedules:
+        schedules[period_key] = {}
+        
+    for workplace in WORKPLACES:
+        if workplace not in schedules[period_key]:
+            schedules[period_key][workplace] = {}
+            
+        workplace_data = workplaces.get(workplace, {})
+        for day in workplace_data:
+            schedules[period_key][workplace][day] = workplace_data[day]
+    
+    save_schedules(schedules)
+    return jsonify({"status": "success"})
+
+@app.route('/api/generate_excel', methods=['POST'])
+@login_required
+def generate_excel():
+    data = request.json
+    year = data.get('year')
+    month = data.get('month')
+    
+    schedules = load_schedules()
+    period_key = f"{year}-{month}"
+    
+    if period_key not in schedules:
+        return jsonify({"error": "No schedule data found for selected period"}), 404
+    
+    # Generate Excel files for each workplace
+    excel_files = []
+    for workplace in WORKPLACES:
+        filename = f"{workplace.replace(' ', '_')}_{year}_{month}.xlsx"
+        file_path = os.path.join(DATA_DIR, filename)
+        
+        # Create Excel with formatting
+        create_excel_schedule(file_path, workplace, year, month, schedules[period_key].get(workplace, {}))
+        excel_files.append(filename)
+    
+    return jsonify({
+        "status": "success",
+        "files": excel_files
+    })
+
+@app.route('/api/download/<filename>')
+@login_required
+def download_file(filename):
+    file_path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+    return send_file(file_path, as_attachment=True)
+
+@app.route('/api/pattern/upload', methods=['POST'])
+@admin_required
+def upload_pattern():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+        
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({"error": "Invalid file format. Only Excel files (.xlsx, .xls) are supported."}), 400
+    
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+        # Save the uploaded file
+        file.save(tmp.name)
+        tmp_path = tmp.name
+    
+    try:
+        # Open the Excel file
+        workbook = openpyxl.load_workbook(tmp_path, data_only=True)
+        
+        # Assume the first sheet is the pattern sheet
+        sheet = workbook.active
+        
+        # Parse the pattern (expecting days as rows and shifts as columns)
+        pattern = {}
+        
+        # Determine max rows to read (30 or 31 days)
+        max_rows = min(sheet.max_row, 31)
+        
+        # Read each day (row) and the 3 shifts (columns)
+        for day in range(1, max_rows + 1):
+            pattern[str(day)] = {}
+            
+            # Read up to 3 shifts (columns)
+            for shift in range(1, min(4, sheet.max_column + 1)):
+                cell_value = sheet.cell(row=day, column=shift).value
+                
+                # Only include non-empty cells
+                if cell_value:
+                    pattern[str(day)][f"shift{shift}"] = str(cell_value).strip()
+        
+        return jsonify({
+            "status": "success", 
+            "pattern": pattern
+        })
+    except Exception as e:
+        return jsonify({"error": f"Error processing Excel file: {str(e)}"}), 500
+    finally:
+        # Clean up the temporary file
+        os.remove(tmp_path)
+
+def create_excel_schedule(file_path, workplace, year, month, schedule_data):
+    # Get number of days in the month
+    num_days = calendar.monthrange(year, month)[1]
+    
+    # Create workbook and worksheet
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{workplace} Schedule"
+    
+    # Define styles
+    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+    weekend_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    header_font = Font(bold=True, color="FFFFFF")
+    centered = Alignment(horizontal='center', vertical='center')
+    
+    # Create title
+    ws.merge_cells('A1:D1')
+    title_cell = ws['A1']
+    title_cell.value = f"{workplace} - {calendar.month_name[month]} {year}"
+    title_cell.font = Font(bold=True, size=16)
+    title_cell.alignment = centered
+    
+    # Create headers
+    headers = ["Day", "Shift 1", "Shift 2", "Shift 3"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col)
+        cell.value = header
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = border
+        cell.alignment = centered
+        ws.column_dimensions[get_column_letter(col)].width = 20
+    
+    # Fill in days
+    for day in range(1, num_days + 1):
+        row = day + 3
+        
+        # Day column
+        day_cell = ws.cell(row=row, column=1)
+        day_cell.value = f"{day} - {calendar.day_name[calendar.weekday(year, month, day)]}"
+        day_cell.border = border
+        day_cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Weekend formatting
+        is_weekend = calendar.weekday(year, month, day) >= 5  # 5 = Saturday, 6 = Sunday
+        if is_weekend:
+            for col in range(1, 5):
+                ws.cell(row=row, column=col).fill = weekend_fill
+        
+        # Fill in shifts
+        day_str = str(day)
+        if day_str in schedule_data:
+            for shift_idx, shift in enumerate(SHIFTS, 1):
+                shift_key = f"shift{shift_idx}"
+                if shift_key in schedule_data[day_str]:
+                    cell = ws.cell(row=row, column=shift_idx + 1)
+                    cell.value = schedule_data[day_str][shift_key]
+                    cell.border = border
+                    cell.alignment = centered
+                else:
+                    ws.cell(row=row, column=shift_idx + 1).border = border
+        else:
+            for shift_idx in range(1, 4):
+                ws.cell(row=row, column=shift_idx + 1).border = border
+    
+    # Set row height
+    for row in range(1, num_days + 5):
+        ws.row_dimensions[row].height = 25
+    
+    # Save workbook
+    wb.save(file_path)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=8000)
