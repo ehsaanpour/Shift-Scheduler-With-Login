@@ -279,6 +279,39 @@
         </div>
     </div>
 </div>
+
+<!-- Shift Limits Modal -->
+<div class="modal fade" id="shiftLimitsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title">
+                    <i class="fas fa-sliders-h me-2"></i>Adjust Shift Limits
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Set the minimum and maximum number of shifts for <span id="shiftLimitsEngineerName" class="fw-bold"></span>:</p>
+                
+                <div class="mb-3">
+                    <label for="minShifts" class="form-label">Minimum Shifts:</label>
+                    <input type="number" class="form-control" id="minShifts" min="1" max="50" value="10">
+                    <div class="form-text">Minimum number of shifts this engineer should have</div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="maxShifts" class="form-label">Maximum Shifts:</label>
+                    <input type="number" class="form-control" id="maxShifts" min="1" max="100" value="30">
+                    <div class="form-text">Maximum number of shifts this engineer should have</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveShiftLimits">Save Limits</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -288,6 +321,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let engineers = [];
     let currentSchedule = {};
     let currentEngineerForLimitations = null;
+    let currentEngineerForShiftLimits = null;
     
     // Initialize current date
     const currentDate = new Date();
@@ -319,6 +353,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('monthSelect').addEventListener('change', generateCalendars);
     document.getElementById('yearSelect').addEventListener('change', generateCalendars);
     document.getElementById('btnSaveLimitations').addEventListener('click', saveLimitations);
+    document.getElementById('saveShiftLimits').addEventListener('click', saveShiftLimits);
     
     // Functions
     function loadEngineers() {
@@ -371,6 +406,12 @@ document.addEventListener('DOMContentLoaded', function() {
             limitBtn.title = 'Set shift limitations';
             limitBtn.addEventListener('click', () => showLimitationsModal(eng));
             
+            const shiftLimitsBtn = document.createElement('button');
+            shiftLimitsBtn.classList.add('btn', 'btn-sm', 'btn-outline-info', 'me-1');
+            shiftLimitsBtn.innerHTML = '<i class="fas fa-sliders-h"></i>';
+            shiftLimitsBtn.title = 'Adjust min/max shifts';
+            shiftLimitsBtn.addEventListener('click', () => showShiftLimitsModal(eng));
+            
             const deleteBtn = document.createElement('button');
             deleteBtn.classList.add('btn', 'btn-sm', 'btn-outline-danger');
             deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
@@ -378,6 +419,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             actions.appendChild(editBtn);
             actions.appendChild(limitBtn);
+            actions.appendChild(shiftLimitsBtn);
             actions.appendChild(deleteBtn);
             
             nameRow.appendChild(name);
@@ -403,6 +445,15 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 cardBody.appendChild(nameRow);
                 cardBody.appendChild(workplaces);
+            }
+            
+            // Add min/max shifts info if any
+            if (eng.minShifts || eng.maxShifts) {
+                const shiftsLimits = document.createElement('small');
+                shiftsLimits.classList.add('text-info', 'd-block', 'mt-1');
+                shiftsLimits.innerHTML = `<i class="fas fa-sliders-h me-1"></i>Shifts: Min ${eng.minShifts || 10}, Max ${eng.maxShifts || 30}`;
+            
+                cardBody.appendChild(shiftsLimits);
             }
             
             card.appendChild(cardBody);
@@ -888,8 +939,84 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    function showShiftLimitsModal(engineer) {
+        currentEngineerForShiftLimits = engineer;
+        
+        // Update the modal title with engineer name
+        document.getElementById('shiftLimitsEngineerName').textContent = engineer.name;
+        
+        // Set the current min/max values or defaults
+        document.getElementById('minShifts').value = engineer.minShifts || 10;
+        document.getElementById('maxShifts').value = engineer.maxShifts || 30;
+        
+        // Show the modal
+        new bootstrap.Modal(document.getElementById('shiftLimitsModal')).show();
+    }
+    
+    function saveShiftLimits() {
+        if (!currentEngineerForShiftLimits) return;
+        
+        const minShifts = parseInt(document.getElementById('minShifts').value);
+        const maxShifts = parseInt(document.getElementById('maxShifts').value);
+        
+        // Validate inputs
+        if (minShifts <= 0 || maxShifts <= 0) {
+            alert('Shift limits must be positive numbers.');
+            return;
+        }
+        
+        if (minShifts > maxShifts) {
+            alert('Minimum shifts cannot be greater than maximum shifts.');
+            return;
+        }
+        
+        // Update the engineer object
+        currentEngineerForShiftLimits.minShifts = minShifts;
+        currentEngineerForShiftLimits.maxShifts = maxShifts;
+        
+        // Update in the global engineers array
+        const engineerIndex = engineers.findIndex(eng => eng.name === currentEngineerForShiftLimits.name);
+        if (engineerIndex !== -1) {
+            engineers[engineerIndex].minShifts = minShifts;
+            engineers[engineerIndex].maxShifts = maxShifts;
+        }
+        
+        // Save to server
+        fetch('/api/engineers', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: currentEngineerForShiftLimits.name,
+                workplaces: currentEngineerForShiftLimits.workplaces,
+                limitations: currentEngineerForShiftLimits.limitations || {},
+                minShifts: minShifts,
+                maxShifts: maxShifts
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // Close modal
+                bootstrap.Modal.getInstance(document.getElementById('shiftLimitsModal')).hide();
+                
+                // Reload engineers
+                loadEngineers();
+                
+                // Show success message
+                alert('Shift limits saved successfully!');
+            }
+        })
+        .catch(error => {
+            console.error('Error saving shift limits:', error);
+            alert('Failed to save shift limits. Please try again.');
+        });
+    }
+    
     // Make saveLimitations function globally available
     window.saveLimitations = saveLimitations;
+    window.saveShiftLimits = saveShiftLimits;
 });
 </script>
 {% endblock %}
