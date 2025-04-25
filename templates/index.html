@@ -500,12 +500,27 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Find existing engineer to preserve limitations
+        // Find existing engineer to preserve limitations and shift limits
         let existingLimitations = {};
+        let minShifts = 10;
+        let maxShifts = 30;
+        
         const existingEngineer = engineers.find(eng => eng.name === name);
-        if (existingEngineer && existingEngineer.limitations) {
-            existingLimitations = existingEngineer.limitations;
+        if (existingEngineer) {
+            if (existingEngineer.limitations) {
+                existingLimitations = existingEngineer.limitations;
+            }
+            if (existingEngineer.minShifts) {
+                minShifts = existingEngineer.minShifts;
+            }
+            if (existingEngineer.maxShifts) {
+                maxShifts = existingEngineer.maxShifts;
+            }
         }
+        
+        // Show loading indicator
+        document.getElementById('btnSaveEngineer').disabled = true;
+        document.getElementById('btnSaveEngineer').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
         
         fetch('/api/engineers', {
             method: 'POST',
@@ -515,10 +530,17 @@ document.addEventListener('DOMContentLoaded', function() {
             body: JSON.stringify({
                 name,
                 workplaces,
-                limitations: existingLimitations
+                limitations: existingLimitations,
+                minShifts: minShifts,
+                maxShifts: maxShifts
             })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.status === 'success') {
                 // Reset form
@@ -527,13 +549,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Close modal
                 bootstrap.Modal.getInstance(document.getElementById('addEngineerModal')).hide();
                 
+                // Show success message
+                alert('Engineer saved successfully!');
+                
                 // Reload engineers
                 loadEngineers();
+            } else {
+                throw new Error('Server returned unsuccessful status');
             }
         })
         .catch(error => {
             console.error('Error saving engineer:', error);
             alert('Failed to save engineer. Please try again.');
+        })
+        .finally(() => {
+            // Reset button state
+            document.getElementById('btnSaveEngineer').disabled = false;
+            document.getElementById('btnSaveEngineer').innerHTML = 'Save';
         });
     }
     

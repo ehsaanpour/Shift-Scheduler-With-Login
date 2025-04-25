@@ -82,13 +82,43 @@ def authenticate_user(username, password):
 def load_engineers():
     try:
         with open(ENGINEERS_FILE, 'r') as f:
-            return json.load(f)
-    except:
+            engineers = json.load(f)
+            print(f"LOAD_ENGINEERS: Successfully loaded {len(engineers)} engineers from file")
+            return engineers
+    except Exception as e:
+        print(f"LOAD_ENGINEERS ERROR: {str(e)}")
         return []
 
 def save_engineers(engineers):
-    with open(ENGINEERS_FILE, 'w') as f:
-        json.dump(engineers, f)
+    try:
+        if not isinstance(engineers, list):
+            print(f"SAVE_ENGINEERS ERROR: Engineers is not a list, it's a {type(engineers)}")
+            return
+
+        if len(engineers) == 0:
+            print("SAVE_ENGINEERS WARNING: Saving an empty engineers list!")
+            
+        # Create backup of current file if it exists
+        if os.path.exists(ENGINEERS_FILE):
+            backup_file = f"{ENGINEERS_FILE}.bak"
+            shutil.copy2(ENGINEERS_FILE, backup_file)
+            print(f"SAVE_ENGINEERS: Created backup at {backup_file}")
+            
+        print(f"SAVE_ENGINEERS: Saving {len(engineers)} engineers to file")
+        # Print names of engineers being saved
+        print(f"SAVE_ENGINEERS: Engineer names: {[eng.get('name', 'UNNAMED') for eng in engineers]}")
+        
+        with open(ENGINEERS_FILE, 'w') as f:
+            json.dump(engineers, f, indent=2)
+            
+        print(f"SAVE_ENGINEERS: Successfully saved {len(engineers)} engineers")
+    except Exception as e:
+        print(f"SAVE_ENGINEERS ERROR: {str(e)}")
+        # Try to restore from backup if available
+        backup_file = f"{ENGINEERS_FILE}.bak"
+        if os.path.exists(backup_file):
+            print(f"SAVE_ENGINEERS: Restoring from backup {backup_file}")
+            shutil.copy2(backup_file, ENGINEERS_FILE)
 
 def load_schedules():
     try:
@@ -248,32 +278,65 @@ def get_engineers():
 @admin_required
 def add_engineer():
     data = request.json
+    print(f"ADD_ENGINEER: Received data for engineer: {data['name']}")
+    
+    # Make a local copy of all engineers to avoid reference issues
     engineers = load_engineers()
+    print(f"ADD_ENGINEER: Loaded {len(engineers)} existing engineers")
     
     # Check if updating or adding new
     engineer_exists = False
-    for eng in engineers:
+    engineer_index = -1
+    
+    # First, find if the engineer exists and get its index
+    for i, eng in enumerate(engineers):
         if eng['name'] == data['name']:
-            eng['workplaces'] = data['workplaces']
-            eng['limitations'] = data.get('limitations', {})
             engineer_exists = True
+            engineer_index = i
             break
-            
-    if not engineer_exists:
-        engineers.append({
+    
+    if engineer_exists:
+        print(f"ADD_ENGINEER: Updating existing engineer at index {engineer_index}: {data['name']}")
+        # Create a new dict for the updated engineer
+        updated_engineer = {
             'name': data['name'],
             'workplaces': data['workplaces'],
-            'limitations': data.get('limitations', {})
-        })
-        
-    save_engineers(engineers)
+            'limitations': data.get('limitations', {}),
+            'minShifts': data.get('minShifts', 10),
+            'maxShifts': data.get('maxShifts', 30)
+        }
+        # Replace the old engineer with the updated one
+        engineers[engineer_index] = updated_engineer
+    else:
+        print(f"ADD_ENGINEER: Adding new engineer: {data['name']}")
+        # Add the new engineer
+        new_engineer = {
+            'name': data['name'],
+            'workplaces': data['workplaces'],
+            'limitations': data.get('limitations', {}),
+            'minShifts': data.get('minShifts', 10),
+            'maxShifts': data.get('maxShifts', 30)
+        }
+        engineers.append(new_engineer)
+    
+    print(f"ADD_ENGINEER: Final list contains {len(engineers)} engineers")
+    print(f"ADD_ENGINEER: Engineer names: {[eng.get('name', 'UNNAMED') for eng in engineers]}")
+    
+    # Make sure we're saving a copy to avoid any reference issues
+    save_engineers(engineers[:])
+    
+    # Verify engineers were saved correctly
+    verification = load_engineers()
+    print(f"ADD_ENGINEER: Verification loaded {len(verification)} engineers")
+    print(f"ADD_ENGINEER: Verified engineer names: {[eng.get('name', 'UNNAMED') for eng in verification]}")
+    
     return jsonify({"status": "success"})
 
-@app.route('/api/engineers/<name>', methods=['DELETE'])
+@app.route('/api/engineers/<n>', methods=['DELETE'])
 @admin_required
-def delete_engineer(name):
+def delete_engineer(n):
     engineers = load_engineers()
-    engineers = [eng for eng in engineers if eng['name'] != name]
+    engineers = [eng for eng in engineers if eng['name'] != n]
     save_engineers(engineers)
     return jsonify({"status": "success"})
 

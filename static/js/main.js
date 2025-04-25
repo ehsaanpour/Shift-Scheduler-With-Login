@@ -128,9 +128,18 @@ function setupEventListeners() {
 
 // Load engineers from API
 function loadEngineers() {
+    console.log('Attempting to load engineers from server...');
+    
     fetch('/api/engineers')
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            console.log(`Successfully loaded ${data.length} engineers from server`);
+            
             // Ensure each engineer has a limitations property
             window.engineers = data.map(eng => {
                 // Ensure limitations are properly structured with string keys
@@ -148,13 +157,13 @@ function loadEngineers() {
                 };
             });
             
-            console.log('Loaded engineers with formatted limitations:', window.engineers);
+            console.log('Processed engineers with formatted limitations:', window.engineers);
             updateEngineersList();
             generateCalendars();
         })
         .catch(error => {
             console.error('Error loading engineers:', error);
-            showAlert('Failed to load engineers. Please refresh the page.', 'danger');
+            showAlert(`Failed to load engineers: ${error.message}. Please refresh the page.`, 'danger');
         });
 }
 
@@ -261,29 +270,64 @@ function saveEngineer() {
         return;
     }
     
-    // Find existing engineer to preserve limitations
+    // Find existing engineer to preserve limitations and shift limits
     let existingLimitations = {};
+    let minShifts = 10;
+    let maxShifts = 30;
+    
     if (window.engineers) {
         const existingEngineer = window.engineers.find(eng => eng.name === name);
-        if (existingEngineer && existingEngineer.limitations) {
-            existingLimitations = existingEngineer.limitations;
+        if (existingEngineer) {
+            console.log(`Found existing engineer: ${name}`, existingEngineer);
+            
+            if (existingEngineer.limitations) {
+                existingLimitations = existingEngineer.limitations;
+            }
+            if (existingEngineer.minShifts) {
+                minShifts = existingEngineer.minShifts;
+            }
+            if (existingEngineer.maxShifts) {
+                maxShifts = existingEngineer.maxShifts;
+            }
+        } else {
+            console.log(`Adding new engineer: ${name}`);
         }
     }
+    
+    // Create payload
+    const payload = {
+        name,
+        workplaces,
+        limitations: existingLimitations,
+        minShifts: minShifts,
+        maxShifts: maxShifts
+    };
+    
+    console.log('Saving engineer with payload:', payload);
+    
+    // Show loading state
+    const saveBtn = document.getElementById('btnSaveEngineer');
+    const originalBtnText = saveBtn.innerHTML;
+    saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
+    saveBtn.disabled = true;
     
     fetch('/api/engineers', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            name,
-            workplaces,
-            limitations: existingLimitations
-        })
+        body: JSON.stringify(payload)
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+        return response.json();
+    })
     .then(data => {
         if (data.status === 'success') {
+            console.log('Engineer saved successfully');
+            
             // Reset form
             document.getElementById('engineerForm').reset();
             
@@ -295,12 +339,20 @@ function saveEngineer() {
             showAlert('Engineer saved successfully!', 'success');
             
             // Reload engineers
+            console.log('Reloading engineers after successful save');
             loadEngineers();
+        } else {
+            throw new Error(`Server returned error status: ${data.status}`);
         }
     })
     .catch(error => {
         console.error('Error saving engineer:', error);
-        showAlert('Failed to save engineer. Please try again.', 'danger');
+        showAlert(`Failed to save engineer: ${error.message}. Please try again.`, 'danger');
+    })
+    .finally(() => {
+        // Reset button state
+        saveBtn.innerHTML = originalBtnText;
+        saveBtn.disabled = false;
     });
 }
 
@@ -707,14 +759,11 @@ function autoAssignEngineers() {
     let currentDay = 1;
     let totalAssignments = 0;
     
-    // Process in batches
     function processBatch() {
         // If we've processed all workplaces, show results
         if (currentWorkplaceIndex >= workplaceData.length) {
             // Remove loading indicator
             document.body.removeChild(loadingDiv);
-            
-            console.log(`Auto-assignment complete. Total assignments: ${totalAssignments}`);
             
             // Show results
             showAssignmentResults(engineerAssignments);
@@ -722,11 +771,10 @@ function autoAssignEngineers() {
         }
         
         const workplace = workplaceData[currentWorkplaceIndex];
-        console.log(`Processing workplace: ${workplace.name}, days ${currentDay} to ${Math.min(currentDay + batchSize - 1, daysInMonth)}`);
-        
-        // Process a batch of days
         const startDay = currentDay;
         const endDay = Math.min(startDay + batchSize - 1, daysInMonth);
+        
+        console.log(`Processing workplace: ${workplace.name}, days ${startDay}-${endDay}`);
         
         for (let day = startDay; day <= endDay; day++) {
             for (let shift = 1; shift <= 3; shift++) {
@@ -768,6 +816,13 @@ function autoAssignEngineers() {
                         }
                     }
                     
+                    // Check if the engineer has reached their maximum shifts
+                    const maxShifts = eng.maxShifts || 30;
+                    if (engineerAssignments[eng.name] >= maxShifts) {
+                        console.log(`Engineer ${eng.name} has reached maximum shifts (${maxShifts})`);
+                        hasLimitation = true;
+                    }
+                    
                     if (hasLimitation) {
                         console.log(`Engineer ${eng.name} has limitation for day ${day}, ${shiftKey}`);
                     } else {
@@ -786,12 +841,25 @@ function autoAssignEngineers() {
                     continue;
                 }
                 
-                // Sort available engineers by number of assignments (ascending)
+                // Sort engineers by priority:
+                // 1. Engineers below minimum shifts requirement
+                // 2. Engineers with fewest assignments
                 const sortedEngineers = [...availableEngineers].sort((a, b) => {
+                    const aMin = a.minShifts || 10;
+                    const bMin = b.minShifts || 10;
+                    
+                    // If one engineer is below minimum and the other isn't, prioritize the one below minimum
+                    const aIsBelowMin = engineerAssignments[a.name] < aMin;
+                    const bIsBelowMin = engineerAssignments[b.name] < bMin;
+                    
+                    if (aIsBelowMin && !bIsBelowMin) return -1;
+                    if (!aIsBelowMin && bIsBelowMin) return 1;
+                    
+                    // If both are below or above minimum, sort by number of assignments
                     return engineerAssignments[a.name] - engineerAssignments[b.name];
                 });
                 
-                // Assign the engineer with fewest assignments
+                // Assign the engineer with highest priority
                 if (sortedEngineers.length > 0) {
                     const assignedEngineer = sortedEngineers[0];
                     selectElem.value = assignedEngineer.name;

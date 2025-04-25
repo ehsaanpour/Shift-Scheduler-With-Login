@@ -72,7 +72,7 @@
     ],
     "limitations": {},
     "minShifts": 10,
-    "maxShifts": 50
+    "maxShifts": 30
   },
   {
     "name": "kashani",
