@@ -72,7 +72,7 @@
     ],
     "limitations": {},
     "minShifts": 10,
-    "maxShifts": 30
+    "maxShifts": 50
   },
   {
     "name": "kashani",
@@ -98,17 +98,6 @@
   },
   {
     "name": "simayi",
-    "workplaces": [
-      "Studio Hispan",
-      "Studio Press",
-      "Nodal"
-    ],
-    "limitations": {},
-    "minShifts": 10,
-    "maxShifts": 30
-  },
-  {
-    "name": "fatemi",
     "workplaces": [
       "Studio Hispan",
       "Studio Press",
@@ -179,6 +168,28 @@
       "Studio Hispan",
       "Studio Press",
       "Engineer Room"
+    ],
+    "limitations": {},
+    "minShifts": 10,
+    "maxShifts": 30
+  },
+  {
+    "name": "Nobakht",
+    "workplaces": [
+      "Studio Hispan",
+      "Studio Press",
+      "Nodal"
+    ],
+    "limitations": {},
+    "minShifts": 10,
+    "maxShifts": 30
+  },
+  {
+    "name": "maleki",
+    "workplaces": [
+      "Studio Hispan",
+      "Studio Press",
+      "Nodal"
     ],
     "limitations": {},
     "minShifts": 10,

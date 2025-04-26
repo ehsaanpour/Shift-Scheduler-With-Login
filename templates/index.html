@@ -1,3 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shift Scheduler</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/print.css') }}" media="print">
+    <script src="{{ url_for('static', filename='js/highlight-patterns.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/static-shift-handler.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</head>
+
 {% extends "base.html" %}
 
 {% block title %}Shift Scheduler - Home{% endblock %}
@@ -103,15 +116,24 @@
                 </div>
             </div>
             <div class="card-footer text-end">
-                <button id="btnClearShifts" class="btn btn-danger me-2">
-                    <i class="fas fa-eraser me-1"></i> Clear All Shifts
-                </button>
-                <button id="btnAutoAssign" class="btn btn-warning me-2">
-                    <i class="fas fa-magic me-1"></i> Auto-Assign Engineers
-                </button>
-                <button id="btnSaveSchedule" class="btn btn-primary">
-                    <i class="fas fa-save me-1"></i> Save Schedule
-                </button>
+                <div class="row align-items-center">
+                    <div class="col-md-6 text-start small">
+                        <div class="fw-bold mb-2">Shift Pattern Warnings:</div>
+                        <div class="mb-1"><span class="three-shifts-warning me-1">■</span> Engineer works all three shifts (1,2,3) in a single day across any studios</div>
+                        <div><span class="consecutive-days-warning me-1">■</span> Engineer has Shift 3 followed by Shift 1 the next day across any studios</div>
+                    </div>
+                    <div class="col-md-6 text-end">
+                        <button id="btnClearShifts" class="btn btn-danger me-2">
+                            <i class="fas fa-eraser me-1"></i> Clear All Shifts
+                        </button>
+                        <button id="btnAutoAssign" class="btn btn-warning me-2">
+                            <i class="fas fa-magic me-1"></i> Auto-Assign Engineers
+                        </button>
+                        <button id="btnSaveSchedule" class="btn btn-primary">
+                            <i class="fas fa-save me-1"></i> Save Schedule
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -348,14 +370,204 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Event listeners
     document.getElementById('btnSaveEngineer').addEventListener('click', saveEngineer);
-    document.getElementById('btnSaveSchedule').addEventListener('click', saveSchedule);
+    
+    // Override the Clear All Shifts button to use our custom implementation
+    const clearAllShiftsBtn = document.getElementById('btnClearShifts');
+    if (clearAllShiftsBtn) {
+        clearAllShiftsBtn.addEventListener('click', function(event) {
+            // Prevent any default behavior
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Our custom clear implementation
+            handleClearAllShifts();
+            
+            // Return false to prevent any default behavior
+            return false;
+        });
+    }
+    
+    // Override the Save Schedule button to use our custom implementation when schedule is empty
+    const saveScheduleBtn = document.getElementById('btnSaveSchedule');
+    if (saveScheduleBtn) {
+        saveScheduleBtn.addEventListener('click', function(event) {
+            // Prevent any default behavior
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Our custom save implementation
+            handleSaveSchedule();
+            
+            // Return false to prevent any default behavior
+            return false;
+        });
+    }
+    
     document.getElementById('btnGenerate').addEventListener('click', generateExcel);
     document.getElementById('monthSelect').addEventListener('change', generateCalendars);
     document.getElementById('yearSelect').addEventListener('change', generateCalendars);
     document.getElementById('btnSaveLimitations').addEventListener('click', saveLimitations);
     document.getElementById('saveShiftLimits').addEventListener('click', saveShiftLimits);
     
-    // Functions
+    /**
+     * Custom implementation to handle clearing all shifts
+     */
+    function handleClearAllShifts() {
+        console.log("[CUSTOM] Clearing all shifts and highlights");
+        
+        // Clear all select values
+        document.querySelectorAll('.engineer-select').forEach(select => {
+            // Clear the select value
+            select.value = '';
+            
+            // Remove any highlight classes
+            select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
+        });
+        
+        // Get current month and year for saving
+        const month = parseInt(document.getElementById('monthSelect').value);
+        const year = parseInt(document.getElementById('yearSelect').value);
+        
+        // Get the list of workplaces from the DOM
+        const workplacesList = Array.from(document.querySelectorAll('.engineer-select'))
+            .map(s => s.dataset.workplace)
+            .filter((v, i, a) => a.indexOf(v) === i);
+        
+        console.log("[CUSTOM] Detected workplaces:", workplacesList);
+        
+        // Create an empty schedule structure with all workplaces
+        const emptyWorkplaces = {};
+        workplacesList.forEach(workplace => {
+            emptyWorkplaces[workplace] = {};
+        });
+        
+        // Reset the current schedule in memory to an empty state
+        currentSchedule = {};
+        workplacesList.forEach(workplace => {
+            currentSchedule[workplace] = {};
+        });
+        
+        console.log("[CUSTOM] Cleared schedule structure:", currentSchedule);
+        
+        // Save the empty schedule to server directly, bypassing the normal saveSchedule function
+        fetch('/api/schedule', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                year,
+                month,
+                workplaces: emptyWorkplaces
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                console.log("[CUSTOM] Successfully cleared all shifts");
+                // alert('All shifts have been cleared successfully.'); // Removed this alert
+                
+                // Force reset all selects again to be sure
+                document.querySelectorAll('.engineer-select').forEach(select => {
+                    select.value = '';
+                    select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
+                });
+            }
+        })
+        .catch(error => {
+            console.error('[CUSTOM] Error clearing shifts:', error);
+            alert('Failed to clear shifts. Please try again.');
+        });
+    }
+    
+    /**
+     * Custom implementation to handle saving schedule, with special handling for empty schedules
+     */
+    function handleSaveSchedule() {
+        const month = parseInt(document.getElementById('monthSelect').value);
+        const year = parseInt(document.getElementById('yearSelect').value);
+        
+        // Get the list of workplaces from the DOM
+        const workplacesList = Array.from(document.querySelectorAll('.engineer-select'))
+            .map(s => s.dataset.workplace)
+            .filter((v, i, a) => a.indexOf(v) === i);
+        
+        console.log("[CUSTOM] Detected workplaces for save:", workplacesList);
+        
+        // Initialize workplaces structure with empty objects for all workplaces
+        const workplaces = {};
+        workplacesList.forEach(workplace => {
+            workplaces[workplace] = {};
+        });
+        
+        // Check if we have any selected engineers at all
+        let hasAnyAssignments = false;
+        
+        // Collect non-empty schedule data from all select elements
+        document.querySelectorAll('.engineer-select').forEach(select => {
+            if (select.value) {
+                hasAnyAssignments = true;
+                
+                const workplace = select.dataset.workplace;
+                const day = select.dataset.day;
+                const shift = select.dataset.shift;
+                
+                if (!workplaces[workplace]) {
+                    workplaces[workplace] = {};
+                }
+                
+                if (!workplaces[workplace][day]) {
+                    workplaces[workplace][day] = {};
+                }
+                
+                workplaces[workplace][day][shift] = select.value;
+            }
+        });
+        
+        console.log('[CUSTOM] Saving schedule with data:', workplaces);
+        console.log('[CUSTOM] Has assignments:', hasAnyAssignments);
+        
+        // Save the schedule to the server
+        fetch('/api/schedule', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                year,
+                month,
+                workplaces
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                alert('Schedule saved successfully!');
+                
+                // Update the in-memory schedule to match what we just saved
+                currentSchedule = JSON.parse(JSON.stringify(workplaces));
+                
+                // If we have any assignments, let loadSchedule handle it
+                // Otherwise, ensure all fields stay empty
+                if (hasAnyAssignments) {
+                    console.log('[CUSTOM] Schedule has assignments, letting loadSchedule handle it');
+                    loadSchedule(year, month);
+                } else {
+                    console.log('[CUSTOM] Empty schedule, keeping all fields empty');
+                    // Just ensure all fields are still empty and highlights are removed
+                    document.querySelectorAll('.engineer-select').forEach(select => {
+                        select.value = '';
+                        select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
+                    });
+                }
+            }
+        })
+        .catch(error => {
+            console.error('[CUSTOM] Error saving schedule:', error);
+            alert('Failed to save schedule. Please try again.');
+        });
+    }
+    
     function loadEngineers() {
         fetch('/api/engineers')
             .then(response => response.json())
@@ -648,6 +860,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     select.dataset.shift = `shift${shift}`;
                     select.dataset.workplace = workplaceName;
                     
+                    // Add change event handler to check for challenging patterns
+                    select.addEventListener('change', function() {
+                        console.log(`Select changed for day ${day}, shift ${shift}, workplace ${workplaceName}`);
+                        // Delay highlighting to ensure all changes are processed
+                        setTimeout(() => {
+                            highlightChallengingShiftPatterns(year, month);
+                        }, 100);
+                    });
+                    
                     // Empty option
                     const emptyOption = document.createElement('option');
                     emptyOption.value = '';
@@ -683,9 +904,18 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch(`/api/schedule?year=${year}&month=${month}`)
             .then(response => response.json())
             .then(data => {
-                currentSchedule = data;
+                // Ensure data is an object (empty or not)
+                currentSchedule = data || {};
                 
-                // Fill in the select fields
+                console.log('Loaded schedule data:', currentSchedule);
+                
+                // First, reset all select elements to empty and remove highlighting
+                document.querySelectorAll('.engineer-select').forEach(select => {
+                    select.value = '';
+                    select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
+                });
+                
+                // Then fill in values from the loaded schedule
                 document.querySelectorAll('.engineer-select').forEach(select => {
                     const workplace = select.dataset.workplace;
                     const day = select.dataset.day;
@@ -695,116 +925,157 @@ document.addEventListener('DOMContentLoaded', function() {
                         currentSchedule[workplace][day] && 
                         currentSchedule[workplace][day][shift]) {
                         select.value = currentSchedule[workplace][day][shift];
-                    } else {
-                        select.value = '';
                     }
                 });
+                
+                // Check for challenging shift patterns after loading the schedule
+                // Only if there's actual data in the schedule
+                let hasData = false;
+                for (const workplace in currentSchedule) {
+                    if (Object.keys(currentSchedule[workplace] || {}).length > 0) {
+                        hasData = true;
+                        break;
+                    }
+                }
+                
+                if (hasData) {
+                    highlightChallengingShiftPatterns(year, month);
+                }
             })
             .catch(error => {
                 console.error('Error loading schedule:', error);
             });
     }
     
-    function saveSchedule() {
-        const month = parseInt(document.getElementById('monthSelect').value);
-        const year = parseInt(document.getElementById('yearSelect').value);
+    /**
+     * Analyzes the schedule for challenging shift patterns and applies highlights.
+     * Reads the current schedule state directly from the DOM elements.
+     * @param {number} year - The year to analyze
+     * @param {number} month - The month to analyze (1-12)
+     */
+    function highlightChallengingShiftPatterns(year, month) {
+        console.log("Checking for challenging shift patterns by reading DOM...");
         
-        // Collect schedule data
-        const workplaces = {};
+        // Get all engineer select elements from the DOM
+        const selectElements = document.querySelectorAll('.engineer-select');
+        if (selectElements.length === 0) {
+            console.log("No schedule select elements found in DOM");
+            return;
+        }
         
-        document.querySelectorAll('.engineer-select').forEach(select => {
-            if (select.value) {
-                const workplace = select.dataset.workplace;
-                const day = select.dataset.day;
-                const shift = select.dataset.shift;
-                
-                if (!workplaces[workplace]) {
-                    workplaces[workplace] = {};
-                }
-                
-                if (!workplaces[workplace][day]) {
-                    workplaces[workplace][day] = {};
-                }
-                
-                workplaces[workplace][day][shift] = select.value;
+        console.log(`Analyzing schedule based on ${selectElements.length} select elements`);
+        
+        // Get number of days in month
+        const daysInMonth = new Date(year, month, 0).getDate();
+        
+        // Create a map to track each engineer's shifts by day, reading from DOM
+        const engineerShifts = {};
+        
+        selectElements.forEach(select => {
+            const engineer = select.value;
+            if (!engineer) return; // Skip empty selections
+            
+            const day = parseInt(select.dataset.day);
+            const shift = parseInt(select.dataset.shift.replace('shift', ''));
+            const workplace = select.dataset.workplace;
+            
+            const dayStr = String(day);
+            
+            // Initialize engineer data structure if needed
+            if (!engineerShifts[engineer]) {
+                engineerShifts[engineer] = {};
             }
+            if (!engineerShifts[engineer][dayStr]) {
+                engineerShifts[engineer][dayStr] = [];
+            }
+            
+            // Store the shift info
+            engineerShifts[engineer][dayStr].push({
+                workplace,
+                shift
+            });
         });
         
-        fetch('/api/schedule', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                year,
-                month,
-                workplaces
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                alert('Schedule saved successfully!');
-                // Reload schedule
-                loadSchedule(year, month);
+        console.log("Collected engineer shifts data from DOM:", Object.keys(engineerShifts).length, "engineers");
+        
+        // Reset all highlights first
+        selectElements.forEach(select => {
+            select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
+        });
+        
+        // Apply highlights for challenging patterns based on the collected data
+        for (const engineer in engineerShifts) {
+            // Check for three consecutive shifts in one day
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayStr = day.toString();
+                
+                if (engineerShifts[engineer][dayStr] && engineerShifts[engineer][dayStr].length >= 3) {
+                    // Check if they have all three shifts (1, 2, 3)
+                    const shifts = engineerShifts[engineer][dayStr].map(s => s.shift).sort((a, b) => a - b);
+                    const uniqueShifts = [...new Set(shifts)];
+                    
+                    if (uniqueShifts.length === 3 && uniqueShifts[0] === 1 && uniqueShifts[1] === 2 && uniqueShifts[2] === 3) {
+                        console.log(`Engineer ${engineer} works all three shifts on day ${day}`);
+                        // Highlight this engineer for all shifts on this day in all workplaces
+                        highlightEngineerOnDay(engineer, day, 'three-shifts-warning');
+                    }
+                }
             }
-        })
-        .catch(error => {
-            console.error('Error saving schedule:', error);
-            alert('Failed to save schedule. Please try again.');
+            
+            // Check for Shift 3 followed by Shift 1 on the next day
+            for (let day = 1; day < daysInMonth; day++) {
+                const currentDayStr = day.toString();
+                const nextDayStr = (day + 1).toString();
+                
+                if (engineerShifts[engineer][currentDayStr] && engineerShifts[engineer][nextDayStr]) {
+                    // Check if they have Shift 3 on current day
+                    const hasShift3 = engineerShifts[engineer][currentDayStr].some(s => s.shift === 3);
+                    
+                    // Check if they have Shift 1 on next day
+                    const hasShift1 = engineerShifts[engineer][nextDayStr].some(s => s.shift === 1);
+                    
+                    if (hasShift3 && hasShift1) {
+                        console.log(`Engineer ${engineer} works Shift 3 on day ${day} and Shift 1 on day ${day+1}`);
+                        // Highlight Shift 3 on current day
+                        highlightEngineerShift(engineer, day, 3, 'consecutive-days-warning');
+                        
+                        // Highlight Shift 1 on next day
+                        highlightEngineerShift(engineer, day + 1, 1, 'consecutive-days-warning');
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Highlights an engineer name for all shifts on a specific day
+     */
+    function highlightEngineerOnDay(engineer, day, className) {
+        // Find all selects on this day that have this engineer selected
+        const selects = document.querySelectorAll(`.engineer-select[data-day="${day}"]`);
+        console.log(`Found ${selects.length} select elements for day ${day}`);
+        
+        selects.forEach(select => {
+            if (select.value === engineer) {
+                console.log(`Highlighting select for engineer ${engineer} on day ${day} with class ${className}`);
+                select.classList.add(className);
+            }
         });
     }
     
-    function generateExcel() {
-        const month = parseInt(document.getElementById('monthSelect').value);
-        const year = parseInt(document.getElementById('yearSelect').value);
+    /**
+     * Highlights an engineer name for a specific shift on a specific day
+     */
+    function highlightEngineerShift(engineer, day, shiftNum, className) {
+        // Find the specific select for this day and shift
+        const selects = document.querySelectorAll(`.engineer-select[data-day="${day}"][data-shift="shift${shiftNum}"]`);
+        console.log(`Found ${selects.length} select elements for day ${day}, shift ${shiftNum}`);
         
-        fetch('/api/generate_excel', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                year,
-                month
-            })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Failed to generate Excel files');
+        selects.forEach(select => {
+            if (select.value === engineer) {
+                console.log(`Highlighting select for engineer ${engineer} on day ${day}, shift ${shiftNum} with class ${className}`);
+                select.classList.add(className);
             }
-            return response.json();
-        })
-        .then(data => {
-            if (data.status === 'success') {
-                const downloadList = document.getElementById('downloadList');
-                downloadList.innerHTML = '';
-                
-                data.files.forEach(file => {
-                    const li = document.createElement('li');
-                    li.classList.add('list-group-item', 'd-flex', 'justify-content-between', 'align-items-center');
-                    
-                    const fileName = document.createElement('span');
-                    fileName.textContent = file;
-                    
-                    const downloadLink = document.createElement('a');
-                    downloadLink.href = `/api/download/${file}`;
-                    downloadLink.classList.add('btn', 'btn-sm', 'btn-outline-primary');
-                    downloadLink.innerHTML = '<i class="fas fa-download me-1"></i> Download';
-                    downloadLink.download = file;
-                    
-                    li.appendChild(fileName);
-                    li.appendChild(downloadLink);
-                    downloadList.appendChild(li);
-                });
-                
-                // Show modal
-                new bootstrap.Modal(document.getElementById('excelGeneratedModal')).show();
-            }
-        })
-        .catch(error => {
-            console.error('Error generating Excel files:', error);
-            alert('Failed to generate Excel files. Please make sure you have saved the schedule.');
         });
     }
     
@@ -1049,6 +1320,59 @@ document.addEventListener('DOMContentLoaded', function() {
     // Make saveLimitations function globally available
     window.saveLimitations = saveLimitations;
     window.saveShiftLimits = saveShiftLimits;
+    
+    function generateExcel() {
+        const month = parseInt(document.getElementById('monthSelect').value);
+        const year = parseInt(document.getElementById('yearSelect').value);
+        
+        fetch('/api/generate_excel', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                year,
+                month
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to generate Excel files');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                const downloadList = document.getElementById('downloadList');
+                downloadList.innerHTML = '';
+                
+                data.files.forEach(file => {
+                    const li = document.createElement('li');
+                    li.classList.add('list-group-item', 'd-flex', 'justify-content-between', 'align-items-center');
+                    
+                    const fileName = document.createElement('span');
+                    fileName.textContent = file;
+                    
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = `/api/download/${file}`;
+                    downloadLink.classList.add('btn', 'btn-sm', 'btn-outline-primary');
+                    downloadLink.innerHTML = '<i class="fas fa-download me-1"></i> Download';
+                    downloadLink.download = file;
+                    
+                    li.appendChild(fileName);
+                    li.appendChild(downloadLink);
+                    downloadList.appendChild(li);
+                });
+                
+                // Show modal
+                new bootstrap.Modal(document.getElementById('excelGeneratedModal')).show();
+            }
+        })
+        .catch(error => {
+            console.error('Error generating Excel files:', error);
+            alert('Failed to generate Excel files. Please make sure you have saved the schedule.');
+        });
+    }
 });
 </script>
 {% endblock %}

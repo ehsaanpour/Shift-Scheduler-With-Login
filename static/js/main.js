@@ -57,12 +57,6 @@ function setupEventListeners() {
         generateBtn.addEventListener('click', generateExcel);
     }
     
-    // Clear All Shifts button
-    const clearShiftsBtn = document.getElementById('btnClearShifts');
-    if (clearShiftsBtn) {
-        clearShiftsBtn.addEventListener('click', clearAllShifts);
-    }
-    
     // Auto-Assign Engineers button
     const autoAssignBtn = document.getElementById('btnAutoAssign');
     if (autoAssignBtn) {
@@ -482,25 +476,42 @@ function loadSchedule(year, month) {
     fetch(`/api/schedule?year=${year}&month=${month}`)
         .then(response => response.json())
         .then(data => {
-            window.currentSchedule = data || {};
-            
-            // Fill in the select fields
+            // First, always reset all selects and remove highlights
             document.querySelectorAll('.engineer-select').forEach(select => {
-                const workplace = select.dataset.workplace;
-                const day = select.dataset.day;
-                const shift = select.dataset.shift;
-                
-                if (window.currentSchedule[workplace] && 
-                    window.currentSchedule[workplace][day] && 
-                    window.currentSchedule[workplace][day][shift]) {
-                    select.value = window.currentSchedule[workplace][day][shift];
-                } else {
-                    select.value = '';
-                }
+                select.value = '';
+                select.classList.remove('three-shifts-warning', 'consecutive-days-warning');
             });
+            
+            // Update in-memory schedule
+            window.currentSchedule = data || {};
+            console.log('Loaded schedule:', window.currentSchedule);
+            
+            // Check if the schedule is empty or missing
+            const isEmpty = !data || Object.keys(data).length === 0;
+            
+            if (!isEmpty) {
+                // Only populate selects if we have data
+                document.querySelectorAll('.engineer-select').forEach(select => {
+                    const workplace = select.dataset.workplace;
+                    const day = select.dataset.day;
+                    const shift = select.dataset.shift;
+                    
+                    if (data[workplace] && 
+                        data[workplace][day] && 
+                        data[workplace][day][shift]) {
+                        select.value = data[workplace][day][shift];
+                    }
+                });
+                
+                // Apply highlighting only if we have data
+                if (typeof highlightChallengingShiftPatterns === 'function') {
+                    highlightChallengingShiftPatterns(year, month);
+                }
+            }
         })
         .catch(error => {
             console.error('Error loading schedule:', error);
+            showAlert('Failed to load schedule data.', 'danger');
         });
 }
 
@@ -900,6 +911,18 @@ function showAssignmentResults(engineerAssignments) {
     console.log("Filtered Assigned Engineers:", assignedEngineers);
     console.log("Total Assignments:", totalAssignments);
     
+    // Run highlighting before showing the modal to ensure patterns are identified
+    try {
+        const year = parseInt(document.getElementById('yearSelect').value);
+        const month = parseInt(document.getElementById('monthSelect').value);
+        if (typeof highlightChallengingShiftPatterns === 'function') {
+            console.log("Applying highlighting after auto-assign");
+            highlightChallengingShiftPatterns(year, month);
+        }
+    } catch (error) {
+        console.error("Error applying highlighting:", error);
+    }
+    
     // Show success message with count
     if (totalAssignments > 0) {
         showAlert(`Successfully assigned ${totalAssignments} shifts to ${assignedEngineers.length} engineers!`, 'success');
@@ -968,18 +991,28 @@ function showAssignmentResults(engineerAssignments) {
             modalBody.innerHTML = summaryContent;
         }
         
-        // Update footer to include Clear All button
+        // Simplify footer to only include Close button
         const modalFooter = existingModal.querySelector('.modal-footer');
         if (modalFooter) {
             modalFooter.innerHTML = `
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-danger" onclick="clearAllShifts()">
-                    <i class="fas fa-eraser me-1"></i> Clear All
-                </button>
-                <button type="button" class="btn btn-primary" onclick="saveSchedule()">
+                <button type="button" class="btn btn-primary" id="btnSaveAfterAssign">
                     <i class="fas fa-save me-1"></i> Save Schedule
                 </button>
             `;
+            
+            // Add event listener to the Save Schedule button in the modal
+            setTimeout(() => {
+                const saveButton = document.getElementById('btnSaveAfterAssign');
+                if (saveButton) {
+                    saveButton.addEventListener('click', function() {
+                        // Close the modal first
+                        bootstrap.Modal.getInstance(existingModal).hide();
+                        // Then save the schedule
+                        saveSchedule();
+                    });
+                }
+            }, 100);
         }
         
         // Show the modal
@@ -1003,10 +1036,7 @@ function showAssignmentResults(engineerAssignments) {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        <button type="button" class="btn btn-danger" onclick="clearAllShifts()">
-                            <i class="fas fa-eraser me-1"></i> Clear All
-                        </button>
-                        <button type="button" class="btn btn-primary" onclick="saveSchedule()">
+                        <button type="button" class="btn btn-primary" id="btnSaveAfterAssign">
                             <i class="fas fa-save me-1"></i> Save Schedule
                         </button>
                     </div>
@@ -1019,49 +1049,19 @@ function showAssignmentResults(engineerAssignments) {
         // Show the modal
         const modal = new bootstrap.Modal(modalDiv);
         modal.show();
-    }
-}
-
-// Function to clear all shifts in the schedule
-function clearAllShifts() {
-    // Show confirmation dialog
-    if (!confirm('Are you sure you want to clear all shifts? This will reset all assignments.')) {
-        return;
-    }
-    
-    // Get all shift selector elements
-    const shiftSelectors = document.querySelectorAll('.engineer-select');
-    
-    // Count how many shifts are currently assigned
-    let assignedShiftsCount = 0;
-    shiftSelectors.forEach(select => {
-        if (select.value !== '') {
-            assignedShiftsCount++;
-        }
-    });
-    
-    // If no shifts are assigned, show a message
-    if (assignedShiftsCount === 0) {
-        showAlert('No shifts are currently assigned.', 'info');
-        return;
-    }
-    
-    // Reset all shift selectors to empty
-    shiftSelectors.forEach(select => {
-        select.value = '';
-    });
-    
-    // Show success message
-    showAlert(`Successfully cleared ${assignedShiftsCount} shift assignments. Don't forget to save your changes!`, 'success');
-    
-    // Reset the current schedule in memory
-    const monthSelect = document.getElementById('monthSelect');
-    const yearSelect = document.getElementById('yearSelect');
-    
-    if (monthSelect && yearSelect) {
-        const month = parseInt(monthSelect.value);
-        const year = parseInt(yearSelect.value);
-        window.currentSchedule = {};
+        
+        // Add event listener to the Save Schedule button in the modal
+        setTimeout(() => {
+            const saveButton = document.getElementById('btnSaveAfterAssign');
+            if (saveButton) {
+                saveButton.addEventListener('click', function() {
+                    // Close the modal first
+                    modal.hide();
+                    // Then save the schedule
+                    saveSchedule();
+                });
+            }
+        }, 100);
     }
 }
 
@@ -1304,7 +1304,6 @@ function applyPattern() {
 // Make functions available globally
 window.autoAssignEngineers = autoAssignEngineers;
 window.saveSchedule = saveSchedule;
-window.clearAllShifts = clearAllShifts;
 window.openImportPatternModal = openImportPatternModal;
 window.previewPattern = previewPattern;
 window.applyPattern = applyPattern;

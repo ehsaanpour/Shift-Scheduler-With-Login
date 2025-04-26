@@ -1,5 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, flash
-from werkzeug.utils import secure_filename
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash, send_file
 import json
 import os
 import calendar
@@ -359,23 +358,19 @@ def save_schedule():
     data = request.json
     year = data.get('year')
     month = data.get('month')
-    workplaces = data.get('workplaces', {})
-    
+    # Get the complete workplaces data from the request
+    workplaces_data_from_request = data.get('workplaces', {})
+
     schedules = load_schedules()
-    
-    # Create key for this month/year if not exists
+
     period_key = f"{year}-{month}"
-    if period_key not in schedules:
-        schedules[period_key] = {}
-        
-    for workplace in WORKPLACES:
-        if workplace not in schedules[period_key]:
-            schedules[period_key][workplace] = {}
-            
-        workplace_data = workplaces.get(workplace, {})
-        for day in workplace_data:
-            schedules[period_key][workplace][day] = workplace_data[day]
-    
+
+    # *** FIX: Directly replace the data for the period ***
+    # Instead of iterating and merging, just assign the received data.
+    # This ensures that if the frontend sends a complete (potentially empty)
+    # structure for the month, it fully overwrites whatever was there before.
+    schedules[period_key] = workplaces_data_from_request
+
     save_schedules(schedules)
     return jsonify({"status": "success"})
 
